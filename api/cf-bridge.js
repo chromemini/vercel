@@ -69,3 +69,7 @@ export default async function handler(request) {
     return json({ error: { message: 'Upstream connection failed: ' + err.message } }, 502);
   }
 }
+
+if (typeof Deno !== 'undefined' && typeof Deno.serve === 'function') {
+  Deno.serve(handler);
+}
