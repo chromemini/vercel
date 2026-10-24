@@ -1,21 +1,14 @@
-// Vercel Edge Function — CORS bridge to Cloudflare Workers AI (BYOK)
-// Deploy: this file must live at /api/cf-bridge.js of a Vercel project.
-// Runtime: Edge (native SSE streaming, no cold-start buffering).
-//
-// BYOK contract:
-//   - Client sends its own Cloudflare Account ID and API Token as custom headers.
-//   - This function NEVER stores, logs, or persists credentials.
-//   - Stateless per request: read headers -> forward to Cloudflare -> pipe response back.
+// Vercel Edge Function — Universal BYOK CORS Bridge
 export const config = { runtime: 'edge' };
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': '*',
   'Access-Control-Max-Age': '86400'
 };
 
-function jsonResponse(body, status = 200) {
+function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
@@ -23,63 +16,56 @@ function jsonResponse(body, status = 200) {
 }
 
 export default async function handler(request) {
-  // Preflight
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  if (request.method !== 'POST') {
-    return jsonResponse({ error: { message: 'Method Not Allowed' } }, 405);
+  const reqUrl = new URL(request.url);
+  // Extract target from ?url= parameter, x-target-url header, or path
+  let target = reqUrl.searchParams.get('url') || request.headers.get('x-target-url');
+  if (!target) {
+    const m = reqUrl.pathname.match(/\/api\/cf-bridge\/(https?:\/\/.+)/);
+    if (m) target = m[1];
   }
 
-  // BYOK: credentials arrive in the JSON body, never stored server-side.
-  let payload;
+  if (!target) {
+    return json({ error: { message: 'Missing target URL. Pass ?url=https://api.endpoint/v1' } }, 400);
+  }
+
+  let targetUrl;
   try {
-    payload = await request.json();
-  } catch (e) {
-    return jsonResponse({ error: { message: 'Invalid JSON body' } }, 400);
+    targetUrl = new URL(target);
+  } catch (_) {
+    return json({ error: { message: 'Invalid target URL: ' + target } }, 400);
   }
 
-  const accountId = payload.__cf_account_id;
-  const apiToken = payload.__cf_api_token;
-
-  // Strip internal transport fields before forwarding to Cloudflare
-  delete payload.__cf_account_id;
-  delete payload.__cf_api_token;
-
-  if (!accountId || !apiToken) {
-    return jsonResponse({ error: { message: 'Missing Cloudflare Account ID or API Token' } }, 400);
+  // Forward incoming credentials and headers, scrub internal edge headers
+  const fwdHeaders = new Headers();
+  const dropHeaders = ['host', 'connection', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto'];
+  for (const [k, v] of request.headers.entries()) {
+    if (!dropHeaders.includes(k.toLowerCase()) && !k.startsWith('x-vercel-')) {
+      fwdHeaders.set(k, v);
+    }
   }
+  fwdHeaders.set('host', targetUrl.host);
 
-  // Basic shape validation to avoid SSRF-ish abuse via body injection
-  if (!/^[a-f0-9]{32}$/i.test(accountId)) {
-    return jsonResponse({ error: { message: 'Invalid Cloudflare Account ID format (expected 32 hex chars)' } }, 400);
-  }
-
-  const targetUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`;
-
-  let upstream;
   try {
-    upstream = await fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
+    const upstream = await fetch(targetUrl.toString(), {
+      method: request.method,
+      headers: fwdHeaders,
+      body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body
+    });
+
+    const outHeaders = new Headers(CORS_HEADERS);
+    outHeaders.set('Content-Type', upstream.headers.get('content-type') || 'application/json');
+    outHeaders.set('Cache-Control', 'no-cache, no-transform');
+    outHeaders.set('X-Accel-Buffering', 'no');
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: outHeaders
     });
   } catch (err) {
-    return jsonResponse({ error: { message: 'Upstream connection failure: ' + err.message } }, 502);
+    return json({ error: { message: 'Upstream connection failed: ' + err.message } }, 502);
   }
-
-  // Stream the SSE body straight through with CORS headers attached
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: {
-      ...CORS_HEADERS,
-      'Content-Type': upstream.headers.get('content-type') || 'application/json',
-      'Cache-Control': 'no-cache, no-transform',
-      'X-Accel-Buffering': 'no'
-    }
-  });
 }
