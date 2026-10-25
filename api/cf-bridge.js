@@ -1,4 +1,8 @@
-// Vercel Edge Function — Universal BYOK CORS Bridge
+// Universal CORS bridge — runs on BOTH:
+//   • Vercel Edge Functions   (default export = function)
+//   • Cloudflare Workers      (default export = { fetch })
+
+// Vercel: declares edge runtime. Workers: ignored (just a named export).
 export const config = { runtime: 'edge' };
 
 const CORS_HEADERS = {
@@ -15,19 +19,17 @@ function json(body, status = 200) {
   });
 }
 
-export default async function handler(request) {
+async function handler(request /*, env, ctx — Workers passes these; Vercel doesn't. Ignored. */) {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
   const reqUrl = new URL(request.url);
-  // Extract target from ?url= parameter, x-target-url header, or path
   let target = reqUrl.searchParams.get('url') || request.headers.get('x-target-url');
   if (!target) {
     const m = reqUrl.pathname.match(/\/api\/cf-bridge\/(https?:\/\/.+)/);
     if (m) target = m[1];
   }
-
   if (!target) {
     return json({ error: { message: 'Missing target URL. Pass ?url=https://api.endpoint/v1' } }, 400);
   }
@@ -39,15 +41,21 @@ export default async function handler(request) {
     return json({ error: { message: 'Invalid target URL: ' + target } }, 400);
   }
 
-  // Forward incoming credentials and headers, scrub internal edge headers
+  // Forward incoming headers, scrub internal edge headers.
+  // NOTE: we do NOT set Host — both Vercel and CF derive it from targetUrl
+  //       automatically, and setting it manually is at best a no-op,
+  //       at worst throws on Workers.
   const fwdHeaders = new Headers();
-  const dropHeaders = ['host', 'connection', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto'];
+  const dropHeaders = [
+    'host', 'connection',
+    'cf-connecting-ip', 'cf-ray', 'cf-visitor',
+    'x-forwarded-for', 'x-forwarded-proto'
+  ];
   for (const [k, v] of request.headers.entries()) {
     if (!dropHeaders.includes(k.toLowerCase()) && !k.startsWith('x-vercel-')) {
       fwdHeaders.set(k, v);
     }
   }
-  fwdHeaders.set('host', targetUrl.host);
 
   try {
     const upstream = await fetch(targetUrl.toString(), {
@@ -70,6 +78,16 @@ export default async function handler(request) {
   }
 }
 
+// -------- Dual-runtime export shim --------
+// Vercel Edge  → calls  default(request)
+// CF Workers   → calls  default.fetch(request, env, ctx)
+// Attaching .fetch to the function satisfies both.
+handler.fetch = handler;
+
+export default handler;
+
+// Optional Deno Deploy. `Deno` is undefined on both Vercel Edge and Workers,
+// so this block is dead code there — harmless.
 if (typeof Deno !== 'undefined' && typeof Deno.serve === 'function') {
   Deno.serve(handler);
 }
