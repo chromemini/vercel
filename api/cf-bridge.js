@@ -79,12 +79,8 @@ async function handler(request /*, env, ctx — Workers passes these; Vercel doe
 }
 
 // -------- Dual-runtime export shim --------
-// Vercel Edge  → calls  default(request)
-// CF Workers   → calls  default.fetch(request, env, ctx)
-// Attaching .fetch to the function satisfies both.
-handler.fetch = handler;
-
 export default handler;
+export { handler as fetch };
 
 // Optional Deno Deploy. `Deno` is undefined on both Vercel Edge and Workers,
 // so this block is dead code there — harmless.
