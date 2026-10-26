@@ -1,8 +1,7 @@
 // Universal CORS bridge — runs on BOTH:
 //   • Vercel Edge Functions   (default export = function)
-//   • Cloudflare Workers      (default export = { fetch })
+//   • Cloudflare Workers      (named export `handler` wrapped by worker/cf-bridge.js)
 
-// Vercel: declares edge runtime. Workers: ignored (just a named export).
 export const config = { runtime: 'edge' };
 
 const CORS_HEADERS = {
@@ -19,7 +18,7 @@ function json(body, status = 200) {
   });
 }
 
-async function handler(request /*, env, ctx — Workers passes these; Vercel doesn't. Ignored. */) {
+export async function handler(request) {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -78,12 +77,5 @@ async function handler(request /*, env, ctx — Workers passes these; Vercel doe
   }
 }
 
-// -------- Dual-runtime export shim --------
-handler.fetch = handler;
+// -------- Vercel Edge entry --------
 export default handler;
-
-// Optional Deno Deploy. `Deno` is undefined on both Vercel Edge and Workers,
-// so this block is dead code there — harmless.
-if (typeof Deno !== 'undefined' && typeof Deno.serve === 'function') {
-  Deno.serve(handler);
-}

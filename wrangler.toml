@@ -1,3 +1,4 @@
 name = "bridge"
-main = "api/cf-bridge.js"
+main = "worker/cf-bridge.js"
 compatibility_date = "2024-11-01"
+workers_dev = true
