@@ -1,12 +1,13 @@
 {
   "name": "cf-bridge-five",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "Vercel Edge bridge for Cloudflare Workers AI (BYOK) — bypasses browser CORS for the YAP translation engine.",
+  "description": "MCP-aware CORS bridge for Cloudflare Workers AI + Streamable HTTP MCP servers.",
   "scripts": {
     "dev": "vercel dev",
     "deploy": "vercel --prod",
-    "deploy:cf": "wrangler deploy"
+    "deploy:cf": "wrangler deploy",
+    "smoke": "curl -i -X OPTIONS ${BRIDGE:-https://cf-bridge-five.vercel.app/api/cf-bridge}"
   },
   "engines": {
     "node": ">=18"

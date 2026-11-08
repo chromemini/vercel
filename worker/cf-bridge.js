@@ -1,3 +1,3 @@
-import { handler } from '../api/cf-bridge.js';
+import { handler } from '../api/_handler.js';
 
 export default { fetch: handler };
